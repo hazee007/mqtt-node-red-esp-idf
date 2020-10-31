@@ -67,7 +67,6 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
 void MQTTLogic(char *sensorReading)
 {
-
   uint32_t command = 0;
   esp_mqtt_client_config_t mqttConfig = {
       // .uri = "mqtt://192.168.10.100:1883",
@@ -86,7 +85,7 @@ void MQTTLogic(char *sensorReading)
       esp_mqtt_client_start(client);
       break;
     case MQTT_CONNECTED:
-      esp_mqtt_client_subscribe(client, "/topic/my/subscription/1", 2);
+      esp_mqtt_client_subscribe(client, "topic/my/subscription/1", 2);
       printf("sending data: %s \n", sensorReading);
       esp_mqtt_client_publish(client, "topic/my/publication/1", sensorReading, strlen(sensorReading), 2, false);
       break;
@@ -103,6 +102,7 @@ void MQTTLogic(char *sensorReading)
 
 void OnConnected(void *para)
 {
+
   while (true)
   {
     char *sensorReading;
@@ -111,6 +111,7 @@ void OnConnected(void *para)
       ESP_ERROR_CHECK(esp_wifi_start());
       MQTTLogic(sensorReading);
     }
+    printf("connect stack=%d\n", uxTaskGetStackHighWaterMark(NULL));
   }
 }
 
@@ -119,33 +120,38 @@ void dht_test(void *pvParameters)
   char *json_str;
   int16_t temperature = 0;
   int16_t humidity = 0;
+  uint8_t chipId[6];
+  esp_efuse_mac_get_default(chipId);
+  char buffer[13];
+  memset(buffer, 0, sizeof(buffer));
+  sprintf(buffer, "%02x%02x%02x%02x%02x%02x", chipId[0], chipId[1], chipId[2], chipId[3], chipId[4], chipId[5]);
 
-  cJSON *root;
-  root = cJSON_CreateObject();
   while (1)
   {
+
     if (dht_read_data(sensor_type, dht_gpio, &humidity, &temperature) == ESP_OK)
     {
-
+      cJSON *root;
+      root = cJSON_CreateObject();
       cJSON_AddItemToObject(root, "temperature", cJSON_CreateNumber(temperature / 10));
       cJSON_AddItemToObject(root, "humidity", cJSON_CreateNumber(humidity / 10));
+      cJSON_AddItemToObject(root, "Mac ID", cJSON_CreateString(buffer));
       json_str = cJSON_Print(root);
-      printf("data: %s", json_str);
       xQueueSend(readingDHT, &json_str, 2000 / portTICK_PERIOD_MS);
-      // printf("Humidity: %d%% Temp: %dC\n", humidity / 10, temperature / 10);
+      vTaskDelay(15000 / portTICK_PERIOD_MS);
+      free(json_str);
       cJSON_Delete(root);
+      printf(" dht stack=%d\n", uxTaskGetStackHighWaterMark(NULL));
     }
     else
       printf("Could not read data from sensor\n");
-
-    vTaskDelay(2000 / portTICK_PERIOD_MS);
   }
 }
 
 void app_main()
 {
-  readingDHT = xQueueCreate(sizeof(int), 10);
+  readingDHT = xQueueCreate(sizeof(int), 100);
   wifiInit();
   xTaskCreate(OnConnected, "handel comms", 1024 * 5, NULL, 5, &taskHandle);
-  xTaskCreate(dht_test, "dht_test", configMINIMAL_STACK_SIZE * 10, NULL, 5, NULL);
+  xTaskCreate(dht_test, "dht_test", 1024 * 5, NULL, 5, NULL);
 }
